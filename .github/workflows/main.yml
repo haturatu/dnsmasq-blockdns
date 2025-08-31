@@ -5,7 +5,7 @@ on:
     - cron: '0 2 * * 0'
   push:
     branches: [ main ]
-    paths: [ 'userconf' ]
+    paths: [ 'userconf' ] 
   workflow_dispatch:
 
 jobs:
@@ -64,7 +64,7 @@ jobs:
       run: |
         cp hosts_new hosts_current
         
-        cat hosts_new | awk '/^0.0.0.0/ {print "address=/"$2"/0.0.0.0"}' > tmp
+        cat hosts_new | awk '/^0.0.0.0/ {print "address=/."$2"/0.0.0.0"}' > tmp
         
         if [ -f userconf ]; then
           cat userconf >> tmp
