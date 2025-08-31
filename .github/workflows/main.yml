@@ -1,0 +1,115 @@
+name: Update Adblock Configuration
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'
+  push:
+    branches: [ main ]
+    paths: [ 'userconf' ]
+  workflow_dispatch:
+
+jobs:
+  update-adblock:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Check trigger type and handle accordingly
+      id: check_trigger
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          echo "Triggered by push to main branch (userconf changed)"
+          echo "trigger_type=push" >> $GITHUB_OUTPUT
+          echo "force_update=true" >> $GITHUB_OUTPUT
+        else
+          echo "Triggered by schedule or manual dispatch"
+          echo "trigger_type=schedule" >> $GITHUB_OUTPUT
+          echo "force_update=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Download current hosts file
+      run: |
+        curl -o hosts_new https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+        
+    - name: Check if update is needed
+      id: check_changes
+      run: |
+        if [ "${{ steps.check_trigger.outputs.force_update }}" = "true" ]; then
+          echo "Update forced due to userconf changes"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "reason=userconf_updated" >> $GITHUB_OUTPUT
+        elif [ -f hosts_current ]; then
+          CURRENT_HASH=$(sha256sum hosts_current | cut -d' ' -f1)
+          NEW_HASH=$(sha256sum hosts_new | cut -d' ' -f1)
+          
+          if [ "$CURRENT_HASH" = "$NEW_HASH" ]; then
+            echo "No changes detected in hosts file"
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "reason=no_changes" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected in hosts file"
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "reason=hosts_updated" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "No current hosts file found, treating as changed"
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "reason=initial_run" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Update adblock configuration
+      if: steps.check_changes.outputs.changed == 'true'
+      run: |
+        cp hosts_new hosts_current
+        
+        cat hosts_new | awk '/^0.0.0.0/ {print "address=/"$2"/0.0.0.0"}' > tmp
+        
+        if [ -f userconf ]; then
+          cat userconf >> tmp
+        fi
+        
+        mv tmp adblock.conf
+        
+        BLOCKED_DOMAINS=$(grep -c "^address=" adblock.conf || echo "0")
+        echo "Generated adblock.conf with $BLOCKED_DOMAINS blocked domains"
+        
+    - name: Commit and push changes
+      if: steps.check_changes.outputs.changed == 'true'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        git add adblock.conf hosts_current
+        
+        BLOCKED_DOMAINS=$(grep -c "^address=" adblock.conf || echo "0")
+        UPDATE_REASON="${{ steps.check_changes.outputs.reason }}"
+        
+        case "$UPDATE_REASON" in
+          "userconf_updated")
+            COMMIT_MSG="Update adblock.conf - userconf modified - $(date '+%Y-%m-%d') - $BLOCKED_DOMAINS domains"
+            ;;
+          "hosts_updated")
+            COMMIT_MSG="Update adblock.conf - upstream hosts updated - $(date '+%Y-%m-%d') - $BLOCKED_DOMAINS domains"
+            ;;
+          "initial_run")
+            COMMIT_MSG="Initial adblock.conf generation - $(date '+%Y-%m-%d') - $BLOCKED_DOMAINS domains"
+            ;;
+          *)
+            COMMIT_MSG="Update adblock.conf - $(date '+%Y-%m-%d') - $BLOCKED_DOMAINS domains"
+            ;;
+        esac
+        
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "$COMMIT_MSG"
+          git push
+          echo "Successfully updated and pushed adblock.conf"
+        fi
+        
+    - name: No update needed
+      if: steps.check_changes.outputs.changed == 'false'
+      run: |
+        echo "No changes in upstream hosts file and no userconf updates, skipping update"
